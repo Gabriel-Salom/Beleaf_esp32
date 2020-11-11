@@ -80,7 +80,8 @@ int automatic_light = 0;
 int light_intensity = 0;
 
 // Variaveis para controle preciso do tempo
-unsigned long StartTime = millis();
+unsigned long PostStartTime = millis();
+unsigned long GetStartTime = millis();
 unsigned long LuxStartTime = millis();
 unsigned long PumpStartTime = millis();
 
@@ -261,7 +262,7 @@ void sending_data(float lux, float temperature, float humidity, float ph, float 
    int httpResponseCode = http.POST(String(jsonOutput));
    // Caso tenha recibido a resposta
    if(httpResponseCode>0){
-    Serial.println(httpResponseCode); 
+    //Serial.println(httpResponseCode); 
    }
    // Caso não seja recebido uma resposta
    else
@@ -287,7 +288,7 @@ void recieving_data(int *lux_max, int *lux_min, int *time_on, int *time_off, int
    int httpResponseCode = http.GET();
    // Caso tenha recibido a resposta
       if (httpResponseCode>0) {
-        Serial.println(httpResponseCode);
+        //Serial.println(httpResponseCode);
         String payload = http.getString();
         //Serial.println(payload);
         char json[500];
@@ -346,7 +347,7 @@ void readph()
 {
   int16_t adc0, adc1, adc2, adc3;
   ph = ads.readADC_SingleEnded(2);
-  ph = 100*ph/65535; // conversão de bits
+  ph = 14*ph/65535; // conversão de bits
   if (isnan(ph))
     {
         //Serial.println(F("Failed to read from ph sensor!"));
@@ -371,10 +372,11 @@ void loop()
     // Verificação de quanto tempo decorreu
     unsigned long CurrentTime = millis();
     unsigned long LuxElapsedTime = (CurrentTime - LuxStartTime); // Tempo que se passou em segundos para leitura do sensor de luz
-    unsigned long ElapsedTime = (CurrentTime - StartTime)/1000; // Tempo que se passou em segundos para envio/recebimento de informações ao servidor
+    unsigned long GetElapsedTime = (CurrentTime - GetStartTime)/1000; // Tempo que se passou em segundos para recebimento de informações ao servidor
+    unsigned long PostElapsedTime = (CurrentTime - PostStartTime)/1000; // Tempo que se passou em segundos para envio de informações ao servidor
     unsigned long PumpElapsedTime = (CurrentTime - PumpStartTime)/1000; // Tempo que se passou em segundos para controle da bomba
 
-    if (LuxElapsedTime > 500)
+    if (LuxElapsedTime >= 1000)
     {
         // Leitura de luminosidade
         readbh1750();
@@ -382,6 +384,8 @@ void loop()
         // Verificação se o controle de luminosidade deve ser feito automatico
         if(automatic_light == 1)
         { 
+          //Serial.println("Luz automatica ligada.");
+          
           // Verificação se a leitura do sensor de luminosidade está adequada
             if(lux != NULL)
             {
@@ -411,17 +415,55 @@ void loop()
         }
         if(automatic_light == 0)
         {
+          //Serial.println("Luz automatica desligada.");
+          
           if(dutyCycle != light_intensity)
           {
-            dutyCycle = light_intensity;
+            dutyCycle = light_intensity*180/100;
             ledcWrite(ledChannel, dutyCycle);
           }
         }
-      Serial.println("automatic_light :" + String(automatic_light) + "\n" + "dutyCycle:" + String(dutyCycle));
+      //Serial.println("dutyCycle:" + String(dutyCycle));
     }
 
-    // Realiza uma amostragem dos sensores e envia/recebe dados do servidor a cada 10 segundos
-    if (ElapsedTime > 10)
+    if (GetElapsedTime >= 2)
+    {
+      GetStartTime = millis(); // Reset no contador de tempo
+      if (WiFi.status()== WL_CONNECTED)
+      {
+          ble_enviado = "wifi conectado";
+          pCharacteristic->setValue(ble_enviado.c_str()); // Return status
+          pCharacteristic->notify();
+          recieving_data(&lux_max, &lux_min, &time_on, &time_off, &light_intensity, &automatic_light); // Verifica se existe alguma atualização nos parametros de controle
+          Serial.print("----------------------------------------------- \n Passaram ");
+          Serial.print(GetElapsedTime);
+          Serial.print(" segundos. as informações recebidas via GET:\n");
+          Serial.println("lux_max :" + String(lux_max) + "\n" + "lux_min:" + String(lux_min) + "\n" + "time_on:" + String(time_on) + "\n" + "time_off:" + String(time_off) + "\n" + "light_intensity:" + String(light_intensity) + "\n" + "automatic_light:" + String(automatic_light) + "\n");
+      }
+      if (WiFi.status()!= WL_CONNECTED)
+      {
+        Serial.println("Erro na conexão wifi"); 
+        ble_enviado = "desconectado";
+        pCharacteristic->setValue(ble_enviado.c_str()); // Return status
+        pCharacteristic->notify();
+
+        ssid = preferences.getString("Kssid", ssid);
+        password = preferences.getString("Kpass", password);       
+        Serial.println("ssid:" + String(ssid) + "\n" + "password:" + String(password));
+        if((ssid != NULL) && (password != NULL))
+        {
+          Serial.println("Tentando conectar");
+          connect_wifi(ssid, password);
+        }
+        else
+        {
+          Serial.println("SSID ou senha não informados");
+        }
+      }
+    }
+    
+    // Realiza uma amostragem dos sensores e enviaos dados do servidor a cada 30 segundos
+    if (PostElapsedTime >= 30)
     {
      
       // Leitura do DHT22
@@ -433,15 +475,16 @@ void loop()
       // Leitura do sensor de condutividade
       readcondutivity();
 
-      StartTime = millis(); // Reset no contador de tempo
+      PostStartTime = millis(); // Reset no contador de tempo
+      Serial.print("----------------------------------------------- \n Passaram ");
+      Serial.print(PostElapsedTime);
+      Serial.print(" segundos. as informações enviadas via POST:\n");
       Serial.println("Lux :" + String(lux) + "\n" + "Temperature:" + String(temperature) + "\n" + "Humidity:" + String(humidity) + "\n" + "ph:" + String(ph) + "\n" + "conductivity:" + String(conductivity) + "\n");
-      //Serial.println("Lux max:" + String(lux_max) + "\n" + "Lux min:" + String(lux_min) + "\n" + "time_on:" + String(time_on) + "\n" + "time_off:" + String(time_on) + "\n");
       if (WiFi.status()== WL_CONNECTED)
       {
           ble_enviado = "wifi conectado";
           pCharacteristic->setValue(ble_enviado.c_str()); // Return status
           pCharacteristic->notify();
-          recieving_data(&lux_max, &lux_min, &time_on, &time_off, &light_intensity, &automatic_light); // Verifica se existe alguma atualização nos parametros de controle
           sending_data(lux, temperature, humidity, ph, conductivity); // envia os dados para o servidor
       }
       if (WiFi.status()!= WL_CONNECTED)
@@ -469,18 +512,22 @@ void loop()
     // Verifica o status da bomba e liga e desliga ela de acordo com os parametros atualizados
     if (pump_status == 0){
       if (PumpElapsedTime >= time_off){
-        Serial.println("Bomba ligada :" + String(PumpElapsedTime) + "\n");
+        Serial.print("----------------------------------------------- \n Bomba ficou desligada por ");
+        Serial.print(PumpElapsedTime);
+        Serial.println(" segundos.\n");
         PumpStartTime = millis();
-        PumpElapsedTime = (CurrentTime - PumpStartTime)/1000;
+        PumpElapsedTime = 0;
         digitalWrite(relePin, HIGH);
         pump_status = 1;
       }
     }
     if (pump_status == 1){
       if (PumpElapsedTime >= time_on){
-        Serial.println("Bomba desligada :" + String(PumpElapsedTime) + "\n");
+        Serial.print("----------------------------------------------- \n Bomba ficou ligada por ");
+        Serial.print(PumpElapsedTime);
+        Serial.println(" segundos.");
         PumpStartTime = millis();
-        PumpElapsedTime = (CurrentTime - PumpStartTime)/1000;
+        PumpElapsedTime = 0;
         digitalWrite(relePin, LOW);
         pump_status = 0;
       }
